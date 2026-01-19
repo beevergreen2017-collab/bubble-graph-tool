@@ -1,0 +1,53 @@
+/* ====== Global width/height baseline ====== */
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+/* ====== 3-column layout ====== */
+.layout {
+  width: 100vw;          /* window width baseline */
+  height: 100vh;
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr) 360px; /* left / center / right */
+  overflow: hidden; /* avoid horizontal scrolling */
+}
+
+/* Left & Right panels */
+.panelLeft,
+.panelRight {
+  height: 100vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 12px;
+  box-sizing: border-box;
+  background: #fff;
+  border-right: 1px solid #e6e6e6;
+}
+
+.panelRight {
+  border-right: none;
+  border-left: 1px solid #e6e6e6;
+}
+
+/* Center main (bubble graph) */
+.main {
+  height: 100vh;
+  min-width: 0; /* critical for grid overflow issues */
+  overflow: hidden;
+  background: #fff;
+}
+
+.graphWrap {
+  height: 100%;
+  width: 100%;
+  position: relative;
+}
+
+/* Debug: Panel backgrounds */
+.panelLeft { background: rgba(255,0,0,0.03); }
+.main { background: rgba(0,255,0,0.03); }
+.panelRight { background: rgba(0,0,255,0.03); }
+
+

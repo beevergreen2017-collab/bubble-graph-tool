@@ -1,0 +1,18 @@
+{
+  "meta": { "title": "Sample Apartment", "author": "Bubble Graph Tool" },
+  "spaces": [
+    { "id": "living", "name": "Living Room", "area_target": 25, "zone": "public" },
+    { "id": "kitchen", "name": "Kitchen", "area_target": 8, "zone": "service" },
+    { "id": "bed1", "name": "Bedroom 1", "area_target": 12, "zone": "private" },
+    { "id": "bed2", "name": "Bedroom 2", "area_target": 10, "zone": "private" },
+    { "id": "bath", "name": "Bathroom", "area_target": 4, "zone": "service" }
+  ],
+  "edges": [
+    { "source": "living", "target": "kitchen", "weight": 2, "type": "adjacent" },
+    { "source": "living", "target": "bed1", "weight": 1, "type": "near" },
+    { "source": "living", "target": "bed2", "weight": 1, "type": "near" },
+    { "source": "bed1", "target": "bath", "weight": 0.5, "type": "adjacent" },
+    { "source": "bed2", "target": "bath", "weight": 0.5, "type": "adjacent" },
+    { "source": "kitchen", "target": "bath", "weight": 0.2, "type": "separate" }
+  ]
+}
