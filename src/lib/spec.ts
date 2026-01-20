@@ -1,5 +1,9 @@
 import { z } from 'zod'
 import * as LZString from 'lz-string'
+import { getRoomTypePreset } from './presets'
+import type { FormData, RoomType } from './types'
+
+export type { FormData, RoomType } from './types'
 
 const ZoneEnum = z.enum(['public', 'private', 'service'])
 const EdgeTypeEnum = z.enum(['adjacent', 'near', 'separate', 'avoid'])
@@ -90,106 +94,7 @@ export function clampNodeRadius(areaTarget: number, minRadius: number = 8, maxRa
   return Math.max(minRadius, Math.min(maxRadius, base + 6))
 }
 
-// Room configuration by type
-interface RoomConfig {
-  roomType: '1' | '2' | '3' | '4'
-  rooms: Array<{
-    id: string
-    name: string
-    zone: 'public' | 'private' | 'service'
-  }>
-}
-
-const ROOM_CONFIGS: Record<'1' | '2' | '3' | '4', RoomConfig['rooms']> = {
-  '1': [
-    { id: 'living', name: 'Living Room', zone: 'public' },
-    { id: 'kitchen', name: 'Kitchen', zone: 'service' },
-    { id: 'bath', name: 'Bathroom', zone: 'service' },
-    { id: 'bed1', name: 'Bedroom', zone: 'private' },
-    { id: 'balcony', name: 'Balcony', zone: 'public' },
-    { id: 'entryway', name: 'Entryway', zone: 'public' },
-  ],
-  '2': [
-    { id: 'living', name: 'Living Room', zone: 'public' },
-    { id: 'dining', name: 'Dining Room', zone: 'public' },
-    { id: 'kitchen', name: 'Kitchen', zone: 'service' },
-    { id: 'bath', name: 'Bathroom', zone: 'service' },
-    { id: 'bed1', name: 'Master Bedroom', zone: 'private' },
-    { id: 'bed2', name: 'Secondary Bedroom', zone: 'private' },
-    { id: 'balcony', name: 'Balcony', zone: 'public' },
-    { id: 'entryway', name: 'Entryway', zone: 'public' },
-  ],
-  '3': [
-    { id: 'living', name: 'Living Room', zone: 'public' },
-    { id: 'dining', name: 'Dining Room', zone: 'public' },
-    { id: 'kitchen', name: 'Kitchen', zone: 'service' },
-    { id: 'bath', name: 'Bathroom', zone: 'service' },
-    { id: 'bed1', name: 'Master Bedroom', zone: 'private' },
-    { id: 'bed2', name: 'Secondary Bedroom 1', zone: 'private' },
-    { id: 'bed3', name: 'Secondary Bedroom 2', zone: 'private' },
-    { id: 'balcony', name: 'Balcony', zone: 'public' },
-    { id: 'entryway', name: 'Entryway', zone: 'public' },
-  ],
-  '4': [
-    { id: 'living', name: 'Living Room', zone: 'public' },
-    { id: 'dining', name: 'Dining Room', zone: 'public' },
-    { id: 'kitchen', name: 'Kitchen', zone: 'service' },
-    { id: 'bath', name: 'Bathroom', zone: 'service' },
-    { id: 'bed1', name: 'Master Bedroom', zone: 'private' },
-    { id: 'bed2', name: 'Secondary Bedroom 1', zone: 'private' },
-    { id: 'bed3', name: 'Secondary Bedroom 2', zone: 'private' },
-    { id: 'bed4', name: 'Secondary Bedroom 3', zone: 'private' },
-    { id: 'balcony', name: 'Balcony', zone: 'public' },
-    { id: 'entryway', name: 'Entryway', zone: 'public' },
-  ],
-}
-
-// Preset relations per roomType: map room id -> relations
-const PRESET_RELATIONS: Record<'1' | '2' | '3' | '4', Record<string, { positive: string[]; negative: string[] }>> = {
-  '1': {
-    living: { positive: ['balcony'], negative: ['kitchen'] },
-    bed1: { positive: [], negative: ['kitchen'] },
-  },
-  '2': {
-    living: { positive: ['dining', 'balcony'], negative: [] },
-    bed1: { positive: ['bed2'], negative: [] },
-    bed2: { positive: [], negative: ['kitchen'] },
-  },
-  '3': {
-    living: { positive: ['dining'], negative: [] },
-    bed1: { positive: ['bed2'], negative: [] },
-    bed2: { positive: ['bed3'], negative: [] },
-  },
-  '4': {
-    living: { positive: ['dining'], negative: [] },
-    bed1: { positive: ['bed2'], negative: [] },
-    bed3: { positive: [], negative: ['bed4'] },
-  },
-}
-
-export interface FormData {
-  roomType: '1' | '2' | '3' | '4'
-  areas: {
-    masterBedroom: number
-    secondBedroom: number
-    secondBedroom2: number
-    secondBedroom3: number
-    livingRoom: number
-    diningRoom: number
-    kitchen: number
-    bathroom: number
-    balcony: number
-    entryway: number
-  }
-  conditions: {
-    scenicView: boolean
-    noiseControl: boolean
-    ventilation: boolean
-  }
-}
-
-// exported RoomType (numeric) and helper to produce default FormData for a room type
-export type RoomType = 1 | 2 | 3 | 4
+const SECONDARY_ROOM_PATTERN = /secondary/i
 
 export function getDefaultSpecByRoomType(roomType: RoomType): FormData {
   const rt = String(roomType) as FormData['roomType']
@@ -271,7 +176,7 @@ export function getDefaultSpecByRoomType(roomType: RoomType): FormData {
 }
 
 export function generateSpacesByRoomType(roomType: '1' | '2' | '3' | '4', areas: FormData['areas'], conditions?: FormData['conditions']): BubbleSpec['spaces'] {
-  const rooms = ROOM_CONFIGS[roomType]
+  const rooms = getRoomTypePreset(parseInt(roomType) as RoomType).rooms
   const areaMap: Record<string, number> = {
     bed1: areas.masterBedroom,
     bed2: areas.secondBedroom,
@@ -348,9 +253,20 @@ export function generateEdgesWithConditions(conditions?: FormData['conditions'])
 export function formDataToSpec(formData: FormData): BubbleSpec {
   const spaces = generateSpacesByRoomType(formData.roomType, formData.areas, formData.conditions)
   const edges = generateEdgesWithConditions(formData.conditions)
-  // apply preset relations if available for this roomType
-  const relationsForType = PRESET_RELATIONS[formData.roomType] || {}
-  const spacesWithRelations = spaces.map(s => ({ ...s, relations: s.relations || { positive: [], negative: [] }, ...(relationsForType[s.id] ? { relations: relationsForType[s.id] } : {}) }))
+  const preset = getRoomTypePreset(parseInt(formData.roomType) as RoomType)
+  const allowedIds = new Set(preset.rooms.map(room => room.id))
+  const relationsById = new Map(preset.relations.map(rel => [rel.source, rel]))
+  const spacesWithRelations = spaces.map(s => {
+    const presetRelations = relationsById.get(s.id)
+    const relations = presetRelations
+      ? {
+        positive: presetRelations.positive.filter(id => allowedIds.has(id)),
+        negative: presetRelations.negative.filter(id => allowedIds.has(id)),
+      }
+      : (s.relations || { positive: [], negative: [] })
+    return { ...s, relations }
+  })
+  const filteredEdges = edges.filter(edge => allowedIds.has(edge.source) && allowedIds.has(edge.target))
 
   return {
     meta: {
@@ -363,8 +279,43 @@ export function formDataToSpec(formData: FormData): BubbleSpec {
       },
     },
     spaces: spacesWithRelations,
-    edges,
+    edges: filteredEdges,
   }
+}
+
+export function pruneSpecToRoomType(spec: BubbleSpec, roomType: RoomType): BubbleSpec {
+  const preset = getRoomTypePreset(roomType)
+  const allowedIds = new Set(preset.rooms.map(room => room.id))
+  const prunedSpaces = (spec.spaces || []).filter(space => allowedIds.has(space.id)).map(space => {
+    const relations = space.relations || { positive: [], negative: [] }
+    return {
+      ...space,
+      relations: {
+        positive: (relations.positive || []).filter(id => allowedIds.has(id)),
+        negative: (relations.negative || []).filter(id => allowedIds.has(id)),
+      },
+    }
+  })
+  const prunedEdges = (spec.edges || []).filter(edge => allowedIds.has(edge.source) && allowedIds.has(edge.target))
+
+  if (import.meta.env.DEV && roomType === 1) {
+    const secondaryFound = (spec.spaces || []).some(space => SECONDARY_ROOM_PATTERN.test(space.id) || SECONDARY_ROOM_PATTERN.test(space.name || ''))
+    if (secondaryFound) {
+      console.warn('[bubble-graph] Secondary bedroom detected in 1BR spec; pruning invalid rooms.')
+    }
+  }
+
+  return {
+    ...spec,
+    spaces: prunedSpaces,
+    edges: prunedEdges,
+  }
+}
+
+export function buildPresetStateByRoomType(roomType: RoomType): { formData: FormData; spec: BubbleSpec } {
+  const formData = getDefaultSpecByRoomType(roomType)
+  const spec = formDataToSpec(formData)
+  return { formData, spec }
 }
 
 // generateSpecByRoomType: returns FormData preset for a room type (wrapper for getDefaultSpecByRoomType)
@@ -378,23 +329,24 @@ export function specToFormData(spec: BubbleSpec): FormData {
   
   // Detect room type based on space count
   const roomType: '1' | '2' | '3' | '4' = (['1', '2', '3', '4'].find(rt => {
-    const roomIds = ROOM_CONFIGS[rt as '1' | '2' | '3' | '4'].map(r => r.id)
+    const roomIds = getRoomTypePreset(parseInt(rt, 10) as RoomType).rooms.map(r => r.id)
     return roomIds.every(id => spaces.find(s => s.id === id))
   }) || '2') as '1' | '2' | '3' | '4'
+  const defaults = getDefaultSpecByRoomType(parseInt(roomType, 10) as RoomType)
 
   return {
     roomType,
     areas: {
-      masterBedroom: areaMap['bed1'] || 12,
-      secondBedroom: areaMap['bed2'] || 10,
-      secondBedroom2: areaMap['bed3'] || 10,
-      secondBedroom3: areaMap['bed4'] || 10,
-      livingRoom: areaMap['living'] || 25,
-      diningRoom: areaMap['dining'] || 8,
-      kitchen: areaMap['kitchen'] || 8,
-      bathroom: areaMap['bath'] || 4,
-      balcony: areaMap['balcony'] || 6,
-      entryway: areaMap['entryway'] || 3,
+      masterBedroom: areaMap['bed1'] ?? defaults.areas.masterBedroom,
+      secondBedroom: areaMap['bed2'] ?? defaults.areas.secondBedroom,
+      secondBedroom2: areaMap['bed3'] ?? defaults.areas.secondBedroom2,
+      secondBedroom3: areaMap['bed4'] ?? defaults.areas.secondBedroom3,
+      livingRoom: areaMap['living'] ?? defaults.areas.livingRoom,
+      diningRoom: areaMap['dining'] ?? defaults.areas.diningRoom,
+      kitchen: areaMap['kitchen'] ?? defaults.areas.kitchen,
+      bathroom: areaMap['bath'] ?? defaults.areas.bathroom,
+      balcony: areaMap['balcony'] ?? defaults.areas.balcony,
+      entryway: areaMap['entryway'] ?? defaults.areas.entryway,
     },
     conditions: {
       scenicView: spec.meta?.external?.scenicView || false,
