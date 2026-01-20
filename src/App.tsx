@@ -7,11 +7,9 @@ import {
   decodeSpecFromQuery,
   encodeSpecToQuery,
   twoRoomStandardPreset,
-  formDataToSpec,
   specToFormData,
-  
-  generateSpecByRoomType,
-  type FormData,
+  buildPresetStateByRoomType,
+  pruneSpecToRoomType,
   type RoomType,
   type BubbleSpec,
 } from './lib/spec'
@@ -24,9 +22,15 @@ interface SelectedNode {
 }
 
 function App() {
-  const [spec, setSpec] = useState<BubbleSpec | null>(twoRoomStandardPreset)
-  const [formData, setFormData] = useState<FormData>(() => specToFormData(twoRoomStandardPreset))
-  const [roomType, setRoomType] = useState<RoomType>(parseInt(formData.roomType) as RoomType)
+  const [appState, setAppState] = useState(() => {
+    const initialFormData = specToFormData(twoRoomStandardPreset)
+    return {
+      roomType: parseInt(initialFormData.roomType) as RoomType,
+      formData: initialFormData,
+      spec: twoRoomStandardPreset as BubbleSpec,
+    }
+  })
+  const { roomType, formData, spec } = appState
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null)
   const [selectedNode, setSelectedNode] = useState<SelectedNode | null>(null)
   const [toast, setToast] = useState<string | null>(null)
@@ -41,39 +45,34 @@ function App() {
     // Parse query: accept rt (preferred) or roomType, and s (compressed spec)
     const params = new URLSearchParams(window.location.search)
     const rtParam = params.get('rt') || params.get('roomType')
-    if (rtParam && ['1', '2', '3', '4'].includes(rtParam)) {
-      const rt = parseInt(rtParam) as RoomType
-      setRoomType(rt)
-      const df = generateSpecByRoomType(rt)
-      setFormData(df)
-      setSpec(formDataToSpec(df))
-      // continue to process `s` if present so compressed spec can override preset
-    }
-
+    const rt = rtParam && ['1', '2', '3', '4'].includes(rtParam) ? (parseInt(rtParam, 10) as RoomType) : null
     const s = params.get('s')
+
     if (s) {
       const res = decodeSpecFromQuery(s) as any
       if (res.success) {
-        setSpec(res.data)
-        setFormData(specToFormData(res.data))
+        const decodedSpec = res.data as BubbleSpec
+        const derived = specToFormData(decodedSpec)
+        const nextRoomType = rt ?? (parseInt(derived.roomType, 10) as RoomType)
+        const prunedSpec = pruneSpecToRoomType(decodedSpec, nextRoomType)
+        const nextFormData = specToFormData(prunedSpec)
+        setAppState({ roomType: nextRoomType, formData: nextFormData, spec: prunedSpec })
+      } else if (rt) {
+        const { formData: nextFormData, spec: nextSpec } = buildPresetStateByRoomType(rt)
+        setAppState({ roomType: rt, formData: nextFormData, spec: pruneSpecToRoomType(nextSpec, rt) })
       }
+    } else if (rt) {
+      const { formData: nextFormData, spec: nextSpec } = buildPresetStateByRoomType(rt)
+      setAppState({ roomType: rt, formData: nextFormData, spec: pruneSpecToRoomType(nextSpec, rt) })
     }
 
     // fit initial graph (either preset or decoded spec)
     setTimeout(() => fitGraph(), 100)
   }, [])
 
-  function handleFormChange(newFormData: FormData) {
-    setFormData(newFormData)
-    const newSpec = formDataToSpec(newFormData)
-    setSpec(newSpec)
-  }
-
   // Load preset for a room type using helper from spec
   function loadPresetByRoomType(rt: RoomType) {
-    setRoomType(rt)
-    const df = generateSpecByRoomType(rt)
-    handleFormChange(df)
+    regenerateFromRoomType(rt)
     // reset layout if available
     try { resetLayout() } catch (e) { /* ignore */ }
     // reheat simulation and zoomToFit on next animation frame
@@ -87,6 +86,14 @@ function App() {
         }
       })
     }, 0)
+  }
+
+  function regenerateFromRoomType(rt: RoomType) {
+    const { formData: nextFormData, spec: nextSpec } = buildPresetStateByRoomType(rt)
+    const prunedSpec = pruneSpecToRoomType(nextSpec, rt)
+    setAppState({ roomType: rt, formData: nextFormData, spec: prunedSpec })
+    setSelectedNode(null)
+    setHoveredNodeId(null)
   }
 
   function copyShareLink() {
@@ -430,9 +437,9 @@ function App() {
                       value={space.name ?? ''}
                       onChange={(e) => {
                         const val = e.target.value
-                        setSpec(prev => {
-                          if (!prev) return prev
-                          return { ...prev, spaces: prev.spaces.map(s => s.id === space.id ? { ...s, name: val } : s) }
+                        setAppState(prev => {
+                          if (!prev.spec) return prev
+                          return { ...prev, spec: { ...prev.spec, spaces: prev.spec.spaces.map(s => s.id === space.id ? { ...s, name: val } : s) } }
                         })
                       }}
                       style={{ padding: '8px', fontSize: 13, borderRadius: 4, border: '1px solid #ccc', width: '100%' }}
@@ -448,9 +455,9 @@ function App() {
                       value={String(space.area_target ?? 0)}
                       onChange={(e) => {
                         const val = parseFloat(e.target.value) || 0
-                        setSpec(prev => {
-                          if (!prev) return prev
-                          return { ...prev, spaces: prev.spaces.map(s => s.id === space.id ? { ...s, area_target: val } : s) }
+                        setAppState(prev => {
+                          if (!prev.spec) return prev
+                          return { ...prev, spec: { ...prev.spec, spaces: prev.spec.spaces.map(s => s.id === space.id ? { ...s, area_target: val } : s) } }
                         })
                       }}
                       style={{ padding: '8px', fontSize: 13, borderRadius: 4, border: '1px solid #ccc', width: '100%' }}
@@ -466,9 +473,9 @@ function App() {
                       value={(space.relations?.positive) || []}
                       onChange={(e) => {
                         const selected = Array.from(e.target.selectedOptions).map(o => o.value)
-                        setSpec(prev => {
-                          if (!prev) return prev
-                          return { ...prev, spaces: prev.spaces.map(s => s.id === space.id ? { ...s, relations: { ...(s.relations || { positive: [], negative: [] }), positive: selected } } : s) }
+                        setAppState(prev => {
+                          if (!prev.spec) return prev
+                          return { ...prev, spec: { ...prev.spec, spaces: prev.spec.spaces.map(s => s.id === space.id ? { ...s, relations: { ...(s.relations || { positive: [], negative: [] }), positive: selected } } : s) } }
                         })
                       }}
                       style={{ width: '100%', minHeight: 54, fontSize: 13 }}
@@ -493,9 +500,9 @@ function App() {
                       value={(space.relations?.negative) || []}
                       onChange={(e) => {
                         const selected = Array.from(e.target.selectedOptions).map(o => o.value)
-                        setSpec(prev => {
-                          if (!prev) return prev
-                          return { ...prev, spaces: prev.spaces.map(s => s.id === space.id ? { ...s, relations: { ...(s.relations || { positive: [], negative: [] }), negative: selected } } : s) }
+                        setAppState(prev => {
+                          if (!prev.spec) return prev
+                          return { ...prev, spec: { ...prev.spec, spaces: prev.spec.spaces.map(s => s.id === space.id ? { ...s, relations: { ...(s.relations || { positive: [], negative: [] }), negative: selected } } : s) } }
                         })
                       }}
                       style={{ width: '100%', minHeight: 54, fontSize: 13 }}
