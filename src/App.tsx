@@ -188,6 +188,10 @@ function App() {
     return { nodes, links }
   }, [spec])
 
+  const nodeById = useMemo(() => {
+    return new Map(graphData.nodes.map((node: any) => [node.id, node]))
+  }, [graphData])
+
   const roomSpaces = useMemo(() => {
     return (spec?.spaces || []).filter(space => space.id !== 'unit')
   }, [spec])
@@ -256,6 +260,11 @@ function App() {
       }).iterations(COLLISION_ITERATIONS)
 
       fgRef.current.d3Force && fgRef.current.d3Force('collide', collideForce)
+
+      const baseLinkForce = fgRef.current.d3Force && fgRef.current.d3Force('link')
+      if (baseLinkForce) {
+        baseLinkForce.distance(getLinkDistance).strength(getLinkStrength)
+      }
 
       // Build positive relation pairs (short strong links)
       const positivePairs: Array<{ source: string; target: string }> = []
@@ -442,6 +451,27 @@ function App() {
 
   function getNodeRadius(node: any) {
     return clampNodeRadius(node.area_target)
+  }
+
+  function getLinkDistance(link: any) {
+    const source = typeof link.source === 'object' ? link.source : nodeById.get(link.source)
+    const target = typeof link.target === 'object' ? link.target : nodeById.get(link.target)
+    if (!source || !target) return 80
+    const combinedDiameter = getNodeRadius(source) + getNodeRadius(target)
+    const minDistance = combinedDiameter * 0.25
+    const maxDistance = combinedDiameter * 2
+    const type = link.type ?? 'adjacent'
+    const typeRatio = type === 'adjacent' ? 0.9 : type === 'near' ? 1.2 : type === 'separate' ? 1.6 : 2.0
+    const desired = combinedDiameter * typeRatio
+    return Math.max(minDistance, Math.min(maxDistance, desired))
+  }
+
+  function getLinkStrength(link: any) {
+    const type = link.type ?? 'adjacent'
+    if (type === 'adjacent') return 0.45
+    if (type === 'near') return 0.3
+    if (type === 'separate') return 0.2
+    return 0.15
   }
 
   const linkStyle = (type: string) => {
