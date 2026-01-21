@@ -13,6 +13,7 @@ import {
   type RoomType,
   type BubbleSpec,
 } from './lib/spec'
+import { getRoomTypePreset } from './lib/presets'
 
 interface SelectedNode {
   id: string
@@ -40,6 +41,10 @@ function App() {
   const graphWrapRef = useRef<HTMLDivElement>(null)
   const resizeTimeoutRef = useRef<number | null>(null)
   const graphZoomTimeoutRef = useRef<number | null>(null)
+  const unitPreset = useMemo(() => getRoomTypePreset(roomType), [roomType])
+  const unitTargetArea = unitPreset.unitTargetAreaM2
+  const unitAllowanceRatio = unitPreset.allowanceRatio ?? 0.15
+  const unitPaddingPx = unitPreset.unitPaddingPx ?? 10
 
   useEffect(() => {
     // Parse query: accept rt (preferred) or roomType, and s (compressed spec)
@@ -158,6 +163,11 @@ function App() {
         zone: s.zone,
         tags: s.tags || [],
       }
+      if (s.id === 'unit') {
+        node.fx = 0
+        node.fy = 0
+        return node
+      }
       
       // Apply forceX constraint based on tags
       if (s.tags?.includes('view')) {
@@ -178,20 +188,28 @@ function App() {
     return { nodes, links }
   }, [spec])
 
+  const roomSpaces = useMemo(() => {
+    return (spec?.spaces || []).filter(space => space.id !== 'unit')
+  }, [spec])
+
   // Dashboard calculations
   const dashboardData = useMemo(() => {
     if (!spec) return {
-      totalArea: 0,
+      roomsSum: 0,
+      roomsRatio: 0,
       spacesByZone: {},
       conditionTags: {},
+      status: 'OK',
     }
 
-    // Calculate total area
-    const totalArea = spec.spaces.reduce((sum, space) => sum + (space.area_target || 0), 0)
+    // Calculate rooms sum (exclude Unit)
+    const roomsSum = roomSpaces.reduce((sum, space) => sum + (space.area_target || 0), 0)
+    const roomsRatio = unitTargetArea > 0 ? roomsSum / unitTargetArea : 0
+    const status = roomsRatio > 0.95 ? 'Over budget' : roomsRatio < 0.75 ? 'Too low' : 'OK'
 
-    // Group spaces by zone
-    const spacesByZone: Record<string, typeof spec.spaces> = {}
-    spec.spaces.forEach((space) => {
+    // Group rooms by zone
+    const spacesByZone: Record<string, typeof roomSpaces> = {}
+    roomSpaces.forEach((space) => {
       if (!spacesByZone[space.zone]) {
         spacesByZone[space.zone] = []
       }
@@ -217,8 +235,8 @@ function App() {
       },
     }
 
-    return { totalArea, spacesByZone, conditionTags }
-  }, [spec, formData.conditions])
+    return { roomsSum, roomsRatio, spacesByZone, conditionTags, status }
+  }, [spec, formData.conditions, roomSpaces, unitTargetArea])
 
   // Fit graph when spec changes
   useEffect(() => {
@@ -233,6 +251,7 @@ function App() {
     try {
       const collideForce = forceCollide((node: any) => {
         // use visible radius + padding for collision
+        if (node.id === 'unit') return 0
         return getNodeRadius(node) + COLLISION_PADDING
       }).iterations(COLLISION_ITERATIONS)
 
@@ -309,6 +328,48 @@ function App() {
     }
   }, [graphData, spec])
 
+  useEffect(() => {
+    if (!fgRef.current) return
+    try {
+      function createContainmentForce(unitId: string, padding: number) {
+        let nodes: any[] = []
+        let unitNode: any = null
+        function force(alpha: number) {
+          if (!unitNode) return
+          const unitRadius = getNodeRadius(unitNode) - padding
+          const maxDistance = Math.max(0, unitRadius)
+          const strength = alpha < 0.15 ? 0.08 : 0.18
+          nodes.forEach(node => {
+            if (node.id === unitId) {
+              node.fx = 0
+              node.fy = 0
+              return
+            }
+            const dx = node.x - unitNode.x
+            const dy = node.y - unitNode.y
+            const dist = Math.sqrt(dx * dx + dy * dy) || 1e-6
+            if (dist > maxDistance) {
+              const pull = ((dist - maxDistance) / dist) * strength * alpha
+              node.vx -= dx * pull
+              node.vy -= dy * pull
+            }
+          })
+        }
+        force.initialize = (nextNodes: any[]) => {
+          nodes = nextNodes
+          unitNode = nodes.find(node => node.id === unitId) || null
+        }
+        return force
+      }
+
+      const containmentForce = createContainmentForce('unit', unitPaddingPx)
+      fgRef.current.d3Force && fgRef.current.d3Force('containment', containmentForce)
+      if (typeof fgRef.current.refresh === 'function') fgRef.current.refresh()
+    } catch (e) {
+      console.warn('failed to set containment force', e)
+    }
+  }, [graphData, unitPaddingPx])
+
   // Setup ResizeObserver for the .graphWrap container (resize-safe)
   useEffect(() => {
     const ZOOM_DEBOUNCE_MS = 100
@@ -368,6 +429,7 @@ function App() {
     public: '#6fa8dc',
     private: '#ffd966',
     service: '#b6d7a8',
+    unit: '#cfe2f3',
   }
 
   // Node radius helpers: use same base radius for rendering and collision
@@ -422,7 +484,7 @@ function App() {
 
           {/* Per-space cards */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {spec?.spaces.map((space) => (
+            {roomSpaces.map((space) => (
               <div key={space.id} style={{ padding: 8, borderRadius: 6, border: '1px solid #e6e6e6', background: '#fff' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                   <strong style={{ fontSize: 13 }}>{space.name ?? space.id}</strong>
@@ -480,14 +542,14 @@ function App() {
                       }}
                       style={{ width: '100%', minHeight: 54, fontSize: 13 }}
                     >
-                      {spec?.spaces.filter(s => s.id !== space.id).map(s => (
+                      {roomSpaces.filter(s => s.id !== space.id).map(s => (
                         <option key={s.id} value={s.id}>{s.name ?? s.id}</option>
                       ))}
                     </select>
                     {/* selected chips, wrap when many */}
                     <div style={{ marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                       {(space.relations?.positive || []).map(pid => {
-                        const item = spec?.spaces.find(ss => ss.id === pid)
+                        const item = roomSpaces.find(ss => ss.id === pid)
                         return <div key={pid} style={{ background: '#eef6ff', padding: '4px 8px', borderRadius: 12, fontSize: 12 }}>{item?.name ?? pid}</div>
                       })}
                     </div>
@@ -507,13 +569,13 @@ function App() {
                       }}
                       style={{ width: '100%', minHeight: 54, fontSize: 13 }}
                     >
-                      {spec?.spaces.filter(s => s.id !== space.id).map(s => (
+                      {roomSpaces.filter(s => s.id !== space.id).map(s => (
                         <option key={s.id} value={s.id}>{s.name ?? s.id}</option>
                       ))}
                     </select>
                     <div style={{ marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                       {(space.relations?.negative || []).map(pid => {
-                        const item = spec?.spaces.find(ss => ss.id === pid)
+                        const item = roomSpaces.find(ss => ss.id === pid)
                         return <div key={pid} style={{ background: '#fff3f0', padding: '4px 8px', borderRadius: 12, fontSize: 12 }}>{item?.name ?? pid}</div>
                       })}
                     </div>
@@ -568,9 +630,27 @@ function App() {
               width={containerDimensions.width}
               height={containerDimensions.height}
               graphData={graphData as any}
-          nodeLabel={(node: any) => `${node.name}\narea: ${node.area_target}`}
+          nodeLabel={(node: any) => node.id === 'unit' ? `Unit\narea: ${node.area_target}` : `${node.name}\narea: ${node.area_target}`}
+          nodeCanvasObjectMode={(node: any) => (node.id === 'unit' ? 'before' : undefined)}
           nodeCanvasObject={(node: any, ctx, globalScale) => {
             const radius = getNodeRadius(node)
+            if (node.id === 'unit') {
+              ctx.beginPath()
+              ctx.fillStyle = 'rgba(120, 120, 120, 0.12)'
+              ctx.strokeStyle = 'rgba(120, 120, 120, 0.35)'
+              ctx.lineWidth = 2
+              ctx.arc(node.x, node.y, radius, 0, 2 * Math.PI, false)
+              ctx.fill()
+              ctx.stroke()
+
+              const label = `Unit (${node.area_target.toFixed(0)} m²)`
+              ctx.font = `${12 / globalScale}px Sans-Serif`
+              ctx.fillStyle = '#444'
+              ctx.textAlign = 'center'
+              ctx.fillText(label, node.x, node.y)
+              return
+            }
+
             const isHovered = hoveredNodeId === node.id
             const isSelected = selectedNode?.id === node.id
             const isNeighbor = hoveredNodeId && getNeighbors(hoveredNodeId).has(node.id)
@@ -627,9 +707,14 @@ function App() {
             ctx.restore()
           }}
           onNodeHover={(node: any) => {
+            if (node?.id === 'unit') {
+              setHoveredNodeId(null)
+              return
+            }
             setHoveredNodeId(node?.id ?? null)
           }}
           onNodeClick={(node: any) => {
+            if (node?.id === 'unit') return
             setSelectedNode({
               id: node.id,
               name: node.name,
@@ -654,9 +739,37 @@ function App() {
             <h4 style={{ margin: '0 0 8px 0', fontSize: 12, fontWeight: 600, color: '#333' }}>Summary</h4>
             <div style={{ fontSize: 11, color: '#666', lineHeight: 1.6, padding: '8px', backgroundColor: '#fff', borderRadius: 3, border: '1px solid #e0e0e0' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}><span>房型：</span><strong>{formData.roomType}房</strong></div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}><span>Spaces：</span><strong>{spec?.spaces.length || 0}</strong></div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}><span>Spaces：</span><strong>{roomSpaces.length}</strong></div>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}><span>Edges：</span><strong>{spec?.edges.length || 0}</strong></div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>總面積：</span><strong>{dashboardData.totalArea.toFixed(1)} m²</strong></div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}><span>Rooms 總面積：</span><strong>{dashboardData.roomsSum.toFixed(1)} m²</strong></div>
+            </div>
+          </div>
+
+          {/* Unit Metrics Section */}
+          <div className="dashboard-section">
+            <h4 style={{ margin: '0 0 8px 0', fontSize: 12, fontWeight: 600, color: '#333' }}>Unit Metrics</h4>
+            <div style={{ fontSize: 11, color: '#666', lineHeight: 1.6, padding: '8px', backgroundColor: '#fff', borderRadius: 3, border: '1px solid #e0e0e0' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                <span>Unit Target：</span>
+                <strong>{unitTargetArea.toFixed(1)} m²</strong>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                <span>Rooms Sum：</span>
+                <strong>{dashboardData.roomsSum.toFixed(1)} m²</strong>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                <span>Ratio：</span>
+                <strong>{dashboardData.roomsRatio.toFixed(2)}</strong>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>Status：</span>
+                <strong style={{ color: dashboardData.status === 'Over budget' ? '#d9534f' : dashboardData.status === 'Too low' ? '#f0ad4e' : '#4caf50' }}>
+                  {dashboardData.status}
+                </strong>
+              </div>
+              <div style={{ marginTop: 6, fontSize: 10, color: '#999' }}>
+                allowanceRatio: {(unitAllowanceRatio * 100).toFixed(0)}%
+              </div>
             </div>
           </div>
 

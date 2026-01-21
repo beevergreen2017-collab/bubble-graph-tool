@@ -5,7 +5,7 @@ import type { FormData, RoomType } from './types'
 
 export type { FormData, RoomType } from './types'
 
-const ZoneEnum = z.enum(['public', 'private', 'service'])
+const ZoneEnum = z.enum(['public', 'private', 'service', 'unit'])
 const EdgeTypeEnum = z.enum(['adjacent', 'near', 'separate', 'avoid'])
 
 export const SpaceSchema = z.object({
@@ -13,6 +13,8 @@ export const SpaceSchema = z.object({
   name: z.string().optional(),
   area_target: z.number().min(0),
   zone: ZoneEnum,
+  areaMin: z.number().min(0).optional(),
+  areaMax: z.number().min(0).optional(),
   tags: z.array(z.string()).optional(),
   meta: z.record(z.string(), z.any()).optional(),
   relations: z
@@ -211,10 +213,44 @@ export function generateSpacesByRoomType(roomType: '1' | '2' | '3' | '4', areas:
       name: room.name,
       area_target: areaMap[room.id] || 5,
       zone: room.zone,
+      ...(room.areaMin !== undefined && { areaMin: room.areaMin }),
+      ...(room.areaMax !== undefined && { areaMax: room.areaMax }),
       ...(tags.length > 0 && { tags }),
       relations: { positive: [], negative: [] },
     }
   })
+}
+
+function scaleRoomAreasToUnitTarget(spaces: BubbleSpec['spaces'], unitTargetAreaM2: number, allowanceRatio: number) {
+  const rooms = spaces.map(space => ({ ...space }))
+  const roomsSum = rooms.reduce((sum, space) => sum + (space.area_target || 0), 0)
+  if (roomsSum <= 0 || unitTargetAreaM2 <= 0) {
+    return { spaces: rooms, roomsSum, overBudget: false }
+  }
+  const scale = (unitTargetAreaM2 * (1 - allowanceRatio)) / roomsSum
+  rooms.forEach(space => {
+    let nextArea = (space.area_target || 0) * scale
+    if (space.areaMin !== undefined) nextArea = Math.max(space.areaMin, nextArea)
+    if (space.areaMax !== undefined) nextArea = Math.min(space.areaMax, nextArea)
+    space.area_target = nextArea
+  })
+  let scaledSum = rooms.reduce((sum, space) => sum + (space.area_target || 0), 0)
+  let overBudget = scaledSum > unitTargetAreaM2 * 0.95
+  if (overBudget) {
+    const rescale = (unitTargetAreaM2 * (1 - allowanceRatio)) / scaledSum
+    rooms.forEach(space => {
+      let nextArea = (space.area_target || 0) * rescale
+      if (space.areaMin !== undefined) nextArea = Math.max(space.areaMin, nextArea)
+      if (space.areaMax !== undefined) nextArea = Math.min(space.areaMax, nextArea)
+      space.area_target = nextArea
+    })
+    scaledSum = rooms.reduce((sum, space) => sum + (space.area_target || 0), 0)
+    overBudget = scaledSum > unitTargetAreaM2 * 0.95
+    if (overBudget) {
+      console.warn(`[bubble-graph] Rooms sum (${scaledSum.toFixed(1)} m²) exceeds 95% of unit target (${unitTargetAreaM2} m²) after scaling.`)
+    }
+  }
+  return { spaces: rooms, roomsSum: scaledSum, overBudget }
 }
 
 export function generateEdgesWithConditions(conditions?: FormData['conditions']): BubbleSpec['edges'] {
@@ -251,12 +287,25 @@ export function generateEdgesWithConditions(conditions?: FormData['conditions'])
 }
 
 export function formDataToSpec(formData: FormData): BubbleSpec {
-  const spaces = generateSpacesByRoomType(formData.roomType, formData.areas, formData.conditions)
-  const edges = generateEdgesWithConditions(formData.conditions)
   const preset = getRoomTypePreset(parseInt(formData.roomType) as RoomType)
+  const allowanceRatio = preset.allowanceRatio ?? 0.15
+  const spaces = generateSpacesByRoomType(formData.roomType, formData.areas, formData.conditions)
+  const scaled = scaleRoomAreasToUnitTarget(spaces, preset.unitTargetAreaM2, allowanceRatio)
+  const unitSpace: BubbleSpec['spaces'][number] = {
+    id: 'unit',
+    name: 'Unit',
+    area_target: preset.unitTargetAreaM2,
+    zone: 'unit',
+    relations: { positive: [], negative: [] },
+  }
+  const roomsWithUnit: BubbleSpec['spaces'] = [unitSpace, ...scaled.spaces]
+  const edges = generateEdgesWithConditions(formData.conditions)
   const allowedIds = new Set(preset.rooms.map(room => room.id))
   const relationsById = new Map(preset.relations.map(rel => [rel.source, rel]))
-  const spacesWithRelations = spaces.map(s => {
+  const spacesWithRelations = roomsWithUnit.map(s => {
+    if (s.id === 'unit') {
+      return s
+    }
     const presetRelations = relationsById.get(s.id)
     const relations = presetRelations
       ? {
@@ -286,6 +335,7 @@ export function formDataToSpec(formData: FormData): BubbleSpec {
 export function pruneSpecToRoomType(spec: BubbleSpec, roomType: RoomType): BubbleSpec {
   const preset = getRoomTypePreset(roomType)
   const allowedIds = new Set(preset.rooms.map(room => room.id))
+  allowedIds.add('unit')
   const prunedSpaces = (spec.spaces || []).filter(space => allowedIds.has(space.id)).map(space => {
     const relations = space.relations || { positive: [], negative: [] }
     return {
